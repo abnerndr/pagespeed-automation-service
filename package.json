@@ -1,0 +1,29 @@
+{
+  "name": "pagespeed-automation-service",
+  "version": "1.0.0",
+  "description": "Microserviço que analisa uma URL no PageSpeed Insights várias vezes e retorna a URL do melhor resultado",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "analyze": "ts-node src/index.ts"
+  },
+  "keywords": [
+    "pagespeed",
+    "playwright",
+    "lighthouse"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^4.21.0",
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.9.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}
