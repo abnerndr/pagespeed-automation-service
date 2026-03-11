@@ -101,8 +101,56 @@ async function runSingleAnalysis(
       runIndex,
     };
 
-    // Extrair o número do medidor principal de Desempenho (id uniq-* → elemento com o número grande)
+    // Prioridade 0: seletor estável do relatório (HTML do Lighthouse)
+    // Ex.: <a href="#performance"> ... <div class="lh-gauge__percentage">23</div> <div class="lh-gauge__label">Desempenho</div>
     try {
+      const perfScoreEl = page.locator('a[href="#performance"] .lh-gauge__percentage').first();
+      const txt = await perfScoreEl.textContent({ timeout: 10_000 }).catch(() => null);
+      const num = txt != null ? parseInt(txt.trim(), 10) : NaN;
+      if (Number.isNaN(num) === false && num >= 0 && num <= 100) {
+        runResult.score = num;
+      }
+    } catch {
+      // ignora
+    }
+
+    // Prioridade 1: achar o score pelo rótulo "Desempenho/Performance" (sem depender de ids dinâmicos)
+    if (runResult.score === null) {
+      try {
+        const found = await page.evaluate(() => {
+          const labelRegex = /^(desempenho|performance)$/i;
+          const isValid = (n: number) => Number.isNaN(n) === false && n >= 0 && n <= 100;
+
+          // Encontra elementos cujo texto é exatamente "Desempenho" (ou "Performance")
+          const all = Array.from(document.querySelectorAll<HTMLElement>('*'));
+          const labels = all.filter(el => labelRegex.test((el.textContent ?? '').trim()));
+
+          for (const labelEl of labels) {
+            // Sobe até um link (na UI, o score + label ficam dentro de um <a>)
+            const anchor = labelEl.closest('a') as HTMLElement | null;
+            const scope = anchor ?? (labelEl.parentElement as HTMLElement | null) ?? labelEl;
+            const scopeText = (scope.textContent ?? '').trim();
+
+            // Pega o primeiro número 0-100 dentro do mesmo escopo do label
+            const matches = scopeText.match(/\b\d{1,3}\b/g) ?? [];
+            for (const m of matches) {
+              const n = parseInt(m, 10);
+              if (isValid(n)) return n;
+            }
+          }
+
+          return null;
+        }).catch(() => null);
+
+        if (found != null) runResult.score = found;
+      } catch {
+        // ignora
+      }
+    }
+
+    // Extrair o número do medidor principal de Desempenho (elementos uniq-* ou SVG text)
+    try {
+      // 1) Elementos com id começando com "uniq-" (textContent do nó ou de descendentes)
       const uniqElements = page.locator('[id^="uniq-"]');
       const count = await uniqElements.count();
       for (let i = 0; i < count; i++) {
@@ -111,11 +159,11 @@ async function runSingleAnalysis(
         const num = text != null ? parseInt(text.trim(), 10) : NaN;
         if (Number.isNaN(num) === false && num >= 0 && num <= 100) {
           runResult.score = num;
-          break; // primeiro número 0-100 no medidor principal
+          break;
         }
       }
-      // Fallback: número pode estar em filho (ex.: SVG <text>); textContent do pai já inclui filhos
-      if (runResult.score === null) {
+      // 2) Filho direto ou descendente com o número (ex.: SVG <text> dentro de [id^="uniq-"])
+      if (runResult.score === null && count > 0) {
         for (let i = 0; i < count; i++) {
           const el = uniqElements.nth(i);
           const inner = await el.evaluate((node) => node.textContent ?? '').catch(() => '');
@@ -125,6 +173,56 @@ async function runSingleAnalysis(
             break;
           }
         }
+      }
+      // 3) XPath: //*[starts-with(@id,"uniq-")]//*[local-name()="text"] (SVG text com o número)
+      if (runResult.score === null) {
+        const svgTexts = page.locator('xpath=//*[starts-with(@id,"uniq-")]//*[local-name()="text"]');
+        const n = await svgTexts.count();
+        for (let i = 0; i < n; i++) {
+          const t = await svgTexts.nth(i).textContent().catch(() => null);
+          const num = t != null ? parseInt(t.trim(), 10) : NaN;
+          if (Number.isNaN(num) === false && num >= 0 && num <= 100) {
+            runResult.score = num;
+            break;
+          }
+        }
+      }
+      // 4) XPath: qualquer nó com id uniq- que tenha filho /text (caminho do usuário)
+      if (runResult.score === null) {
+        const byXpath = page.locator('xpath=//*[starts-with(@id,"uniq-")]');
+        const k = await byXpath.count();
+        for (let i = 0; i < k; i++) {
+          const el = byXpath.nth(i);
+          const fullText = await el.evaluate((node) => {
+            const textNode = node.querySelector('text') ?? node.querySelector('[id]');
+            return (textNode?.textContent ?? node.textContent ?? '').trim();
+          }).catch(() => '');
+          const num = parseInt(fullText, 10);
+          if (Number.isNaN(num) === false && num >= 0 && num <= 100) {
+            runResult.score = num;
+            break;
+          }
+        }
+      }
+      // 5) No contexto da página: pegar texto de todos [id^="uniq-"] (incl. filhos) e primeiro 0-100
+      if (runResult.score === null) {
+        const found = await page.evaluate(() => {
+          const nodes = document.querySelectorAll('[id^="uniq-"]');
+          for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            const text = (node.textContent ?? '').trim();
+            const num = parseInt(text, 10);
+            if (!Number.isNaN(num) && num >= 0 && num <= 100) return num;
+            const child = node.querySelector('text');
+            if (child) {
+              const t = (child.textContent ?? '').trim();
+              const n = parseInt(t, 10);
+              if (!Number.isNaN(n) && n >= 0 && n <= 100) return n;
+            }
+          }
+          return null;
+        }).catch(() => null);
+        if (found != null) runResult.score = found;
       }
     } catch {
       // mantém score null
