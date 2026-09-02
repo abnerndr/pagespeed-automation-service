@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import { getBestPageSpeedResult } from './pagespeed';
 import { PORT } from './constants/port';
 import type { FormFactor } from './score';
+import { mountDocs } from './docs';
 
 const app = express();
 
@@ -65,6 +66,12 @@ async function handleAnalyze(req: Request, res: Response, urlRaw: string | undef
 
 app.use(express.json());
 
+app.get('/', (_req: Request, res: Response) => {
+  res.redirect('/docs');
+});
+
+mountDocs(app);
+
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'pagespeed-automation-service' });
 });
@@ -92,5 +99,7 @@ app.post('/analyze', async (req: Request, res: Response) => {
 
 app.listen(PORT, () => {
   console.log(`PageSpeed Automation Service rodando em http://localhost:${PORT}`);
+  console.log(`Swagger UI: http://localhost:${PORT}/docs`);
+  console.log(`OpenAPI:    http://localhost:${PORT}/openapi.json`);
   console.log(`Exemplo: GET http://localhost:${PORT}/analyze?url=https://example.com&runs=3&strategy=mobile`);
 });
