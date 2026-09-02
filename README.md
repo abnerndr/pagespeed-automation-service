@@ -9,26 +9,28 @@ Spec OpenAPI: **[/openapi.json](http://localhost:8080/openapi.json)**
 
 ## Como funciona
 
-1. Chama a [API oficial do Google](https://developers.google.com/speed/docs/insights/v5/get-started?hl=pt-br) (`pagespeedonline/v5/runPagespeed`).
-2. Lê `lighthouseResult.categories.performance.score` (0–1) e aplica `Math.round` → **0–100**.
-3. Usa **`mobile`** por padrão (aba padrão do site). Desktop é outra medição.
-4. Se não houver chave, ou a API responder **429**, o serviço cai no site via Playwright (mais lento).
+O `score` e a `bestReportUrl` vêm **do mesmo relatório salvo** no PageSpeed Insights (`/analysis/{site}/{id}?form_factor=mobile`).
 
-Para o caminho rápido e estável, use `PAGESPEED_API_KEY`.
+1. Abre o site, dispara a análise e espera o permalink com ID.
+2. Lê o medidor visível de **Performance** (não Accessibility, CrUX nem Desktop escondido).
+3. Se `runs > 1`, escolhe o run de maior score **e devolve a URL daquele run**.
+
+Abrir `bestReportUrl` deve mostrar o mesmo número. Use a aba **Mobile** se `strategy=mobile` (padrão). Desktop é outra medição.
+
+Não usamos a API REST do Google no resultado que você compara com o site: ela não gera esse permalink. Um link `analysis?url=...` (sem ID) **roda de novo** e o score muda.
 
 ---
 
 ## Requisitos
 
 - Node.js 18+
-- Chave da PageSpeed Insights API (recomendado)
-- Playwright / Chromium só no **fallback** (quando a API do Google falha)
+- Playwright / Chromium (`npx playwright install chromium`)
 
 ## Instalação
 
 ```bash
 npm install
-npx playwright install chromium   # só necessário para o fallback
+npx playwright install chromium
 ```
 
 ## Configuração
@@ -37,29 +39,16 @@ Crie um `.env` na raiz:
 
 ```env
 PORT=8080
-PAGESPEED_API_KEY=sua_chave_aqui
 PAGESPEED_RUNS=3
 ```
 
 | Variável | Descrição | Padrão |
 |---|---|---|
 | `PORT` | Porta HTTP | `8000` |
-| `PAGESPEED_API_KEY` | Chave da API do Google (`PSI_API_KEY` também vale) | vazio (fallback no site) |
 | `PAGESPEED_RUNS` | Runs padrão se a request não enviar `runs` | `3` |
-| `USE_SYSTEM_CHROME` | Força Chrome/Chromium do sistema no fallback | desligado |
+| `USE_SYSTEM_CHROME` | Força Chrome/Chromium do sistema | desligado |
 
-### Como gerar a chave do Google
-
-A chave gratuita é gerada nesta página:
-
-**[Começar a usar a API PageSpeed Insights](https://developers.google.com/speed/docs/insights/v5/get-started?hl=pt-br)**
-
-1. Abra o link acima e clique em **Gerar uma chave**.
-2. Crie (ou escolha) um projeto no Google Cloud.
-3. Ative **PageSpeed Insights API**.
-4. Cole a chave em `PAGESPEED_API_KEY` no `.env`.
-
-Sem chave, o Google limita as chamadas. O serviço tenta a API e, se falhar, abre o site (lento).
+A chave da [API PageSpeed Insights](https://developers.google.com/speed/docs/insights/v5/get-started?hl=pt-br) **não entra no `score`/`bestReportUrl`**: esses campos vêm do relatório salvo no site, para o número bater com o link.
 
 ---
 
@@ -84,7 +73,7 @@ Com `PORT=8080`:
 
 ## API deste serviço
 
-Timeout da análise: até ~2 minutos por run na API do Google. Com chave, vários runs vão **em paralelo** (até 3).
+Timeout da análise: até ~90s por run (tempo do Lighthouse no site). `runs` é sequencial.
 
 ### `GET /health`
 
@@ -132,14 +121,14 @@ curl -X POST http://localhost:8080/analyze \
 {
   "urlAnalyzed": "https://example.com",
   "strategy": "mobile",
-  "bestReportUrl": "https://pagespeed.web.dev/analysis?url=https%3A%2F%2Fexample.com&form_factor=mobile",
+  "bestReportUrl": "https://pagespeed.web.dev/analysis/https-example-com/abc123xyz?form_factor=mobile",
   "bestPerformanceScore": 100,
   "score": 100,
   "totalRuns": 3,
   "runs": [
     {
       "runIndex": 1,
-      "reportUrl": "https://pagespeed.web.dev/analysis?url=https%3A%2F%2Fexample.com&form_factor=mobile",
+      "reportUrl": "https://pagespeed.web.dev/analysis/https-example-com/abc123xyz?form_factor=mobile",
       "performanceScore": 100,
       "score": 100
     }
@@ -149,21 +138,21 @@ curl -X POST http://localhost:8080/analyze \
 
 | Campo | Significado |
 |---|---|
-| `score` / `bestPerformanceScore` | Melhor Performance 0–100 (`Math.round` do JSON do Google) |
+| `score` / `bestPerformanceScore` | Inteiro do medidor de Performance daquele relatório (0–100) |
 | `strategy` | `mobile` ou `desktop` usado na medição |
-| `bestReportUrl` | Link do PageSpeed Insights nessa URL + form factor |
+| `bestReportUrl` | Permalink **com ID** (`/analysis/{site}/{id}`). Abrir deve mostrar o mesmo score |
 | `runs` | Cada tentativa (`score` e `performanceScore` são o mesmo número) |
 
 **Mobile e desktop não são comparáveis.** Se você olha Desktop no site, chame `strategy=desktop`.
 
-**Abrir `bestReportUrl` no browser dispara uma análise nova na UI.** O Lighthouse de laboratório varia entre runs. O número confiável desta API é o `score` da response, não o que a página mostrar depois.
+Se a `bestReportUrl` for só `analysis?url=...` (sem ID), o site vai rodar de novo e o número muda. O serviço espera o permalink com ID antes de devolver.
 
 ### Erros
 
 | HTTP | Quando |
 |---|---|
 | `400` | Faltou `url` |
-| `500` | API do Google e fallback do site falharam |
+| `500` | Falha ao abrir o PageSpeed Insights ou ler o medidor |
 
 ```json
 {
@@ -181,7 +170,7 @@ curl -X POST http://localhost:8080/analyze \
 3. Preencha `url` (ex.: `https://example.com`), `runs=1`, `strategy=mobile`
 4. **Execute**
 
-A primeira chamada com chave costuma levar 15–40s (tempo do Lighthouse no Google).
+A primeira chamada costuma levar 30–90s (tempo do Lighthouse no site).
 
 ---
 
@@ -194,7 +183,7 @@ docker run --rm -p 8080:8080 --env-file .env pagespeed-automation-service
 
 ---
 
-## Fallback Playwright (sem chave / 429)
+## Playwright no Linux (WSL / container)
 
 O Chromium do Playwright precisa de libs no Linux (WSL, container mínimo):
 

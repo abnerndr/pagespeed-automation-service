@@ -4,16 +4,15 @@ export const openApiSpec = {
     title: 'PageSpeed Automation API',
     version: '1.0.0',
     description: [
-      'Analisa uma URL no **PageSpeed Insights**, repete a medição e devolve o **melhor score de Performance** (0–100), igual ao medidor da UI.',
+      'O `score` e a `bestReportUrl` vêm **do mesmo relatório salvo** (`/analysis/{site}/{id}?form_factor=...`). Abrir o link deve mostrar o mesmo medidor de Performance.',
       '',
       '### Como funciona',
-      '1. Chama a [API oficial do Google](https://developers.google.com/speed/docs/insights/v5/get-started?hl=pt-br) (`runPagespeed`).',
-      '2. Converte `lighthouseResult.categories.performance.score` (0–1) com `Math.round` → inteiro 0–100.',
-      '3. Usa `strategy=mobile` por padrão (mesma aba padrão de [pagespeed.web.dev](https://pagespeed.web.dev/)).',
-      '4. Sem `PAGESPEED_API_KEY` (ou com HTTP 429), cai no site via Playwright.',
+      '1. Abre [pagespeed.web.dev](https://pagespeed.web.dev/) e espera o permalink com ID.',
+      '2. Lê o medidor visível de Performance (não CrUX, Accessibility nem Desktop escondido).',
+      '3. Se `runs > 1`, escolhe o maior score e devolve **a URL daquele run**.',
+      '4. Padrão `strategy=mobile` (aba padrão do site). Desktop é outra medição.',
       '',
-      '### Chave do Google (recomendado)',
-      'Gere a chave gratuita em [Começar a usar a API PageSpeed Insights](https://developers.google.com/speed/docs/insights/v5/get-started?hl=pt-br) e defina `PAGESPEED_API_KEY` no `.env`. Sem ela a API do Google limita as chamadas e o serviço fica mais lento.',
+      'Um link `analysis?url=...` (sem ID) dispara análise nova e o número muda. Este serviço não devolve esse link como resultado.',
     ].join('\n'),
     contact: {
       name: 'PageSpeed Automation Service',
@@ -142,7 +141,7 @@ export const openApiSpec = {
           reportUrl: {
             type: 'string',
             format: 'uri',
-            description: 'Link do PageSpeed Insights para essa URL e form_factor. Abrir no browser dispara uma análise nova na UI.',
+            description: 'Permalink do relatório salvo (`/analysis/{site}/{id}`). Abrir deve mostrar o mesmo score.',
           },
           performanceScore: { type: 'integer', nullable: true, minimum: 0, maximum: 100, example: 92 },
           score: { type: 'integer', nullable: true, minimum: 0, maximum: 100, example: 92 },
@@ -157,7 +156,7 @@ export const openApiSpec = {
           bestReportUrl: {
             type: 'string',
             format: 'uri',
-            description: 'Link do relatório no pagespeed.web.dev (mesmo form_factor da análise).',
+            description: 'Permalink com ID do melhor run. Não é `analysis?url=` (esse link roda de novo).',
           },
           bestPerformanceScore: { type: 'integer', nullable: true, minimum: 0, maximum: 100, example: 92 },
           score: {
@@ -190,26 +189,26 @@ export const openApiSpec = {
             example: {
               urlAnalyzed: 'https://example.com',
               strategy: 'mobile',
-              bestReportUrl: 'https://pagespeed.web.dev/analysis?url=https%3A%2F%2Fexample.com&form_factor=mobile',
+              bestReportUrl: 'https://pagespeed.web.dev/analysis/https-example-com/abc123xyz?form_factor=mobile',
               bestPerformanceScore: 100,
               score: 100,
               totalRuns: 3,
               runs: [
                 {
                   runIndex: 1,
-                  reportUrl: 'https://pagespeed.web.dev/analysis?url=https%3A%2F%2Fexample.com&form_factor=mobile',
+                  reportUrl: 'https://pagespeed.web.dev/analysis/https-example-com/abc123xyz?form_factor=mobile',
                   performanceScore: 100,
                   score: 100,
                 },
                 {
                   runIndex: 2,
-                  reportUrl: 'https://pagespeed.web.dev/analysis?url=https%3A%2F%2Fexample.com&form_factor=mobile',
+                  reportUrl: 'https://pagespeed.web.dev/analysis/https-example-com/abc123xyz?form_factor=mobile',
                   performanceScore: 99,
                   score: 99,
                 },
                 {
                   runIndex: 3,
-                  reportUrl: 'https://pagespeed.web.dev/analysis?url=https%3A%2F%2Fexample.com&form_factor=mobile',
+                  reportUrl: 'https://pagespeed.web.dev/analysis/https-example-com/abc123xyz?form_factor=mobile',
                   performanceScore: 100,
                   score: 100,
                 },

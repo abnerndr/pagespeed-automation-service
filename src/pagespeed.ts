@@ -1,10 +1,13 @@
 import { chromium, type Browser, type Page } from 'playwright';
-import { getBestPageSpeedResult as getBestFromPsiApi, buildViewerUrl, pickBestRun, type PsiAnalyzeOptions, type PsiBestResult } from './psi-api';
-import { parseGaugePercentage, type FormFactor } from './score';
+import { buildViewerUrl, pickBestRun, type PsiAnalyzeOptions, type PsiBestResult } from './psi-api';
+import { isReportPermalink, parseGaugePercentage, type FormFactor } from './score';
 
 const ANALYSIS_TIMEOUT_MS = 90_000;
-const GAUGE_TEXT_TIMEOUT_MS = 10_000;
+const POLL_MS = 400;
 
+/**
+ * Medidor visível de Performance (não o header sticky nem o relatório Desktop escondido).
+ */
 const VISIBLE_PERFORMANCE_GAUGE =
   '.lh-scores-header a[href="#performance"] .lh-gauge__percentage';
 
@@ -37,18 +40,34 @@ async function launchBrowser(): Promise<Browser> {
   }
 }
 
-async function readVisiblePerformanceScore(page: Page): Promise<number | null> {
+async function waitForStoredReport(
+  page: Page
+): Promise<{ reportUrl: string; score: number | null }> {
   const gauge = page.locator(VISIBLE_PERFORMANCE_GAUGE).first();
-  await gauge.waitFor({ state: 'visible', timeout: ANALYSIS_TIMEOUT_MS });
+  const deadline = Date.now() + ANALYSIS_TIMEOUT_MS;
 
-  const deadline = Date.now() + GAUGE_TEXT_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const score = parseGaugePercentage(await gauge.textContent());
-    if (score != null) return score;
-    await page.waitForTimeout(200);
+    const reportUrl = page.url();
+    let score: number | null = null;
+    if (await gauge.isVisible().catch(() => false)) {
+      score = parseGaugePercentage(await gauge.textContent());
+    }
+    if (isReportPermalink(reportUrl) && score != null) {
+      return { reportUrl, score };
+    }
+    await page.waitForTimeout(POLL_MS);
   }
 
-  return parseGaugePercentage(await gauge.textContent());
+  const reportUrl = page.url();
+  const score = await gauge.isVisible().catch(() => false)
+    ? parseGaugePercentage(await gauge.textContent())
+    : null;
+
+  if (score == null) {
+    throw new Error('Não foi possível ler o medidor de Performance no PageSpeed Insights');
+  }
+
+  return { reportUrl, score };
 }
 
 async function runBrowserAnalysis(
@@ -75,10 +94,10 @@ async function runBrowserAnalysis(
       await cookieBtn.click();
     }
 
-    const score = await readVisiblePerformanceScore(page);
+    const { reportUrl, score } = await waitForStoredReport(page);
     return {
       runIndex,
-      reportUrl: page.url(),
+      reportUrl,
       performanceScore: score,
       score,
     };
@@ -87,16 +106,25 @@ async function runBrowserAnalysis(
   }
 }
 
-async function getBestFromBrowser(
+/**
+ * Score e URL vêm do mesmo relatório salvo em pagespeed.web.dev
+ * (`/analysis/{slug}/{id}?form_factor=...`). Abrir essa URL deve mostrar o mesmo medidor.
+ *
+ * A API oficial do Google não gera esse permalink — por isso não é usada no resultado
+ * que você compara com o site (ela devolveria um score de um run e um link que dispara outro).
+ */
+export async function getBestPageSpeedResult(
   urlToAnalyze: string,
-  runs: number,
-  strategy: FormFactor
+  runs: number = 3,
+  options: PsiAnalyzeOptions = {}
 ): Promise<PsiBestResult> {
+  const strategy = options.strategy ?? 'mobile';
+  const runsNum = Math.max(1, Math.min(50, runs));
   const browser = await launchBrowser();
   const results: PsiBestResult['runs'] = [];
 
   try {
-    for (let i = 0; i < runs; i++) {
+    for (let i = 0; i < runsNum; i++) {
       results.push(await runBrowserAnalysis(browser, urlToAnalyze, strategy, i + 1));
     }
   } finally {
@@ -108,35 +136,8 @@ async function getBestFromBrowser(
     bestReportUrl: best.reportUrl,
     bestPerformanceScore: best.performanceScore,
     score: best.score ?? best.performanceScore,
-    totalRuns: runs,
+    totalRuns: runsNum,
     strategy,
     runs: results,
   };
-}
-
-/**
- * Prefere a API oficial (rápida e com o mesmo inteiro da UI).
- * Sem chave ou com 429, cai no site — já na URL de análise, sem preencher o form.
- */
-export async function getBestPageSpeedResult(
-  urlToAnalyze: string,
-  runs: number = 3,
-  options: PsiAnalyzeOptions = {}
-): Promise<PsiBestResult> {
-  const strategy = options.strategy ?? 'mobile';
-  const apiKey = options.apiKey ?? process.env.PAGESPEED_API_KEY ?? process.env.PSI_API_KEY;
-  const runsNum = Math.max(1, Math.min(50, runs));
-
-  try {
-    return await getBestFromPsiApi(urlToAnalyze, runsNum, {
-      ...options,
-      strategy,
-      apiKey,
-      concurrency: apiKey ? options.concurrency : 1,
-    });
-  } catch (err) {
-    if (options.fetchImpl) throw err;
-    console.warn('PageSpeed API indisponível, usando o site:', err instanceof Error ? err.message : err);
-    return getBestFromBrowser(urlToAnalyze, runsNum, strategy);
-  }
 }

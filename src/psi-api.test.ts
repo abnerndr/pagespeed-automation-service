@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPsiApiUrl, buildViewerUrl, pickBestRun } from './psi-api';
+import { isReportPermalink } from './score';
 
 describe('buildPsiApiUrl', () => {
   it('usa strategy=mobile por padrão, igual à aba padrão da UI', () => {
@@ -25,6 +26,10 @@ describe('buildViewerUrl', () => {
       'https://pagespeed.web.dev/analysis?url=https%3A%2F%2Fexample.com&form_factor=mobile'
     );
   });
+
+  it('não é o relatório salvo: abrir analysis?url= dispara uma análise nova (score diferente)', () => {
+    assert.equal(isReportPermalink(buildViewerUrl('https://example.com', 'mobile')), false);
+  });
 });
 
 describe('pickBestRun', () => {
@@ -37,6 +42,7 @@ describe('pickBestRun', () => {
     const best = pickBestRun(runs);
     assert.equal(best.runIndex, 2);
     assert.equal(best.score, 71);
+    assert.equal(best.reportUrl, 'b');
   });
 });
 
